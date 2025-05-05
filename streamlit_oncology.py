@@ -5,57 +5,43 @@ import faiss
 import requests
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from py2neo import Graph
 
-# ---------------------------
-# 🔐 Set OpenAI API Key
-# ---------------------------
-openai.api_key = ""
-# ---------------------------
-# 🎨 Streamlit UI - Book Selection
-# ---------------------------
+openai.api_key = os.environ['OPENAI_API_KEY']
+
 st.title("📚 Book QA System")
-st.markdown("Choose to use the default book (*Pride and Prejudice*) or upload your own `.txt` file.")
 
-book_name = st.text_input("📘 Enter Book Name (or type 'default' to use Pride and Prejudice):").strip().lower()
+book_choice = st.selectbox("Select a Book", options=["Pride and Prejudice", "New Book"])
 
 book_text = None
-book_file_path = f"{book_name}.txt"
+book_name = "pride_and_prejudice" if book_choice == "Pride and Prejudice" else None
 
-# Check if the file already exists, if so, use it
-if os.path.exists(book_file_path):
-    with open(book_file_path, 'r', encoding='utf-8') as f:
-        book_text = f.read()
-
-if book_name == "default" and not os.path.exists(book_file_path):
-    # Download Pride and Prejudice only if it doesn't exist already
-    st.markdown("*📥 Downloading Pride and Prejudice...*")
+if book_choice == "Pride and Prejudice":
+    if not os.path.exists("pride_and_prejudice.txt"):
+        st.markdown("*📥 Downloading Pride and Prejudice...*")
 
 
-    @st.cache_data(show_spinner=False)
-    def fetch_default_book():
-        url = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
-        response = requests.get(url)
-        with open(book_file_path, 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        return response.text
+        @st.cache_data(show_spinner=False)
+        def fetch_default_book():
+            url = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
+            response = requests.get(url)
+            with open("pride_and_prejudice.txt", 'w', encoding='utf-8') as f:
+                f.write(response.text)
+            return response.text
 
 
-    book_text = fetch_default_book()
-    book_name = "pride_and_prejudice"
+        book_text = fetch_default_book()
+    else:
+        with open("pride_and_prejudice.txt", 'r', encoding='utf-8') as f:
+            book_text = f.read()
 
-elif book_name != "default":
-    uploaded_file = st.file_uploader("📄 Upload your book (.txt only):", type=["txt"])
-    if uploaded_file is not None:
-        book_text = uploaded_file.read().decode("utf-8")
-        # Save the uploaded book text to the local file system
-        with open(book_file_path, 'w', encoding='utf-8') as f:
-            f.write(book_text)
+elif book_choice == "New Book":
+    book_file = st.file_uploader("Upload a `.txt` file for the new book", type="txt")
+    if book_file is not None:
+        book_text = book_file.read().decode("utf-8")
+        book_name = book_file.name.replace(".txt", "")
 
-# Proceed only if text is available
 if book_text:
-    # ---------------------------
-    # 🧩 Chunking Function
-    # ---------------------------
     @st.cache_data(show_spinner=False)
     def chunk_text(text):
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
@@ -65,9 +51,6 @@ if book_text:
     chunks = chunk_text(book_text)
 
 
-    # ---------------------------
-    # 🤖 Load Sentence Embedding Model
-    # ---------------------------
     @st.cache_resource(show_spinner=False)
     def load_model():
         return SentenceTransformer("all-MiniLM-L6-v2")
@@ -76,9 +59,6 @@ if book_text:
     model = load_model()
 
 
-    # ---------------------------
-    # 🧠 Create or Load FAISS Index
-    # ---------------------------
     @st.cache_resource(show_spinner=False)
     def create_or_load_faiss_index(chunks, book_name):
         index_file = f"{book_name}_index.faiss"
@@ -100,20 +80,27 @@ if book_text:
         st.success("✅ Indexed into vector DB")
 
 
-    # ---------------------------
-    # 🔍 Search Top Chunks
-    # ---------------------------
     def get_top_chunks(query, k=3):
         query_embedding = model.encode([query])
         D, I = index.search(query_embedding, k)
         return [chunks[i] for i in I[0]]
 
 
-    # ---------------------------
-    # 💡 Generate Answer
-    # ---------------------------
+    def run_neo4j_query(query):
+        try:
+            graph = Graph("bolt://localhost:7687",
+                          auth=("neo4j", "ontology123"))
+            results = graph.run(query).data()
+            return results
+        except Exception as e:
+            st.error(f"Failed to run Neo4j query: {e}")
+            return []
+
+
     def generate_answer(chunks, query):
+        # Fetch relevant chunks from FAISS
         context = "\n".join(chunks)
+
         prompt = f"""
             You are an assistant that answers questions about a book using the provided context.
 
@@ -122,8 +109,22 @@ if book_text:
             {context}
             \"\"\"
 
+            Now, I also want you to consider the information from the graph database (Neo4j). Here is some additional context:
+
+            (Add Neo4j context here when you run the query)
+
             Question: {query}
             Answer:"""
+
+        # Use Neo4j query to fetch related entities or relationships (optional)
+        neo4j_query = f"MATCH (n)-[r]->(m) WHERE n.name CONTAINS '{query}' RETURN n.name, type(r), m.name LIMIT 5"
+        neo4j_results = run_neo4j_query(neo4j_query)
+
+        # Append Neo4j results to the context for the model
+        if neo4j_results:
+            graph_context = "\n".join(
+                [f"{res['n.name']} - {res['type(r)']} - {res['m.name']}" for res in neo4j_results])
+            prompt = prompt.replace("(Add Neo4j context here when you run the query)", graph_context)
 
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
@@ -135,9 +136,6 @@ if book_text:
         return response.choices[0].message['content'].strip()
 
 
-    # ---------------------------
-    # 🧠 Ask Question
-    # ---------------------------
     st.markdown("---")
     st.markdown("### 💬 Ask a question about the book")
     user_query = st.text_input("🔍 Enter your question:")
@@ -145,21 +143,19 @@ if book_text:
     if user_query:
         relevant_chunks = get_top_chunks(user_query)
 
-        # Log retrieved chunks
         print("\n🔍 Retrieved Chunks:")
         for i, chunk in enumerate(relevant_chunks):
             print(f"\n--- Chunk {i + 1} ---\n{chunk}\n")
 
         answer = generate_answer(relevant_chunks, user_query)
 
-        # Log final answer
         print("\n✅ Generated Answer:")
         print(answer)
 
-        # Show in app
         st.markdown("### 📖 Answer")
         st.write(answer)
 
 else:
-    if book_name != "":
-        st.warning("⚠️ Please upload a valid `.txt` file to continue.")
+    if book_choice != "":
+        st.warning("⚠️ Please upload a valid `.txt` file or choose a book.")
+
