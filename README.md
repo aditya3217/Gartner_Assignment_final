@@ -1,19 +1,28 @@
-# 📚 Book QA using RAG with FAISS & OpenAI
+# 📘 Book QA using RAG + Knowledge Graph (Neo4j)
 
-This project implements a **Retrieval-Augmented Generation (RAG)** pipeline for question answering based on any book (in `.txt` format). If the user doesn't provide a file, it defaults to *Pride and Prejudice* by Jane Austen from Project Gutenberg.
+This project implements a **hybrid QA system** that combines **Retrieval-Augmented Generation (RAG)** with a **Knowledge Graph (KG)** to answer questions about a book. If a book is not uploaded by the user, the system defaults to *Pride and Prejudice* by Jane Austen (sourced from Project Gutenberg).
 
 ---
 
 ## 🚀 Features
 
-- 🔍 Ask any question about a book.
-- 📂 Upload your own book as a `.txt` file OR use a default book (auto-downloaded).
-- ✂️ Text chunking with overlap using LangChain.
-- 🧠 Embedding generation using SentenceTransformers (`all-MiniLM-L6-v2`).
-- ⚡ Fast semantic search with FAISS.
-- 🤖 Answer generation using OpenAI GPT-4o-mini.
-- 🌐 Intuitive Streamlit web interface.
-- 🧠 FAISS index is saved with the book name for reuse (e.g., `pride_and_prejudice_index.faiss`).
+### 🔍 Question Answering System
+
+- Ask any question about a book.
+- Choose a book from dropdown:  
+  - 📖 Default: *Pride and Prejudice*  
+  - 📤 Upload your own `.txt` file
+- Text chunking with overlap using **LangChain**
+- Embedding generation via **SentenceTransformers (all-MiniLM-L6-v2)**
+- Semantic search powered by **FAISS**
+- Answer generation using **OpenAI GPT-4o-mini**
+
+### 🧠 Knowledge Graph Enhancement
+
+- Extracts semantic triples (subject-predicate-object) using **LLM-based extraction**
+- Triples stored in **Neo4j** graph database as nodes and relationships
+- Internally enriches the answer generation process by retrieving contextual information from the knowledge graph
+- No manual Cypher query needed — KG context is automatically used to improve QA results
 
 ---
 
@@ -21,9 +30,8 @@ This project implements a **Retrieval-Augmented Generation (RAG)** pipeline for 
 
 - Python
 - Streamlit
+- FAISS
 - OpenAI GPT-4o-mini
 - SentenceTransformers
-- FAISS
 - LangChain
-
----
+- Neo4j (via `py2neo`)
